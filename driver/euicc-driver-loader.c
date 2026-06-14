@@ -217,10 +217,12 @@ static char *get_first_runpath() {
 }
 
 static char *get_driver_path() {
-    _cleanup_free_ char *LPAC_DRIVER_HOME = get_first_runpath();
-    if (LPAC_DRIVER_HOME == NULL)
+    char *home = get_first_runpath();
+    if (home == NULL)
+        home = get_origin();
+    if (home == NULL)
         return NULL;
-    return path_concat(LPAC_DRIVER_HOME, "driver");
+    return path_concat(home, "driver");
 }
 
 static const struct euicc_driver *find_driver_by_path(const char *restrict dir, char *restrict name) {
