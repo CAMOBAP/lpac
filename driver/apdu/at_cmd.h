@@ -53,6 +53,11 @@ int at_write_command(struct at_userdata *userdata, const char *command);
 
 int at_expect_with_deadline(struct at_userdata *userdata, char **response, const char *expected, int deadline_ms);
 
+/* Like at_expect_with_deadline(), but a line that doesn't match `expected` is still
+ * captured as the response when is_fallback_match(line) returns non-zero for it. */
+int at_expect_with_deadline_ex(struct at_userdata *userdata, char **response, const char *expected,
+                               int (*is_fallback_match)(const char *line), int deadline_ms);
+
 int at_expect(struct at_userdata *userdata, char **response, const char *expected);
 
 int at_device_open(struct at_userdata *userdata, const char *device_name);
