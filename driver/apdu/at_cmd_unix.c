@@ -64,56 +64,6 @@ int at_write_command(struct at_userdata *userdata, const char *command) {
     return 0;
 }
 
-/*
- * Extracts the next complete line from `buf` into `line` and strips the trailing CR.
- * Returns 0 on success, -1 if no complete line is buffered yet.
- */
-static int at_pop_line(char *buf, size_t *buf_len, char *line, size_t line_size) {
-    char *newline = memchr(buf, '\n', *buf_len);
-    if (!newline)
-        return -1;
-
-    const size_t consumed = newline - buf + 1;
-    size_t line_len = consumed - 1;
-    if (line_len >= line_size)
-        line_len = line_size - 1;
-    memcpy(line, buf, line_len);
-    line[line_len] = '\0';
-
-    memmove(buf, buf + consumed, *buf_len - consumed);
-    *buf_len -= consumed;
-
-    line[strcspn(line, "\r")] = 0;
-    return 0;
-}
-
-/*
- * Applies AT response bookkeeping (OK/ERROR detection, `expected` prefix capture)
- * to an already-extracted `line`.
- * Returns 0 once `result` is final, -1 if more lines are needed.
- */
-static int at_match_line(const char *line, const char *expected, char **found_response_data, int *result) {
-    if (strlen(line) == 0)
-        return -1;
-
-    if (strcmp(line, "ERROR") == 0) {
-        *result = -1;
-        return 0;
-    }
-    if (strcmp(line, "OK") == 0) {
-        *result = 0;
-        return 0;
-    }
-
-    if (expected && strncmp(line, expected, strlen(expected)) == 0) {
-        free(*found_response_data);
-        *found_response_data = strdup(line + strlen(expected));
-        while (*found_response_data && (*found_response_data)[0] == ' ')
-            memmove(*found_response_data, *found_response_data + 1, strlen(*found_response_data));
-    }
-    return -1;
-}
-
 struct at_deadline {
     int fd;
     int event_fd;
@@ -129,6 +79,10 @@ struct at_deadline {
 static int at_deadline_init(struct at_deadline *d, int fd, int ms) {
     d->fd = fd;
     d->ms = ms;
+    d->event_fd = -1;
+    if (ms < 0)
+        return 0;
+
     d->event_fd = timerfd_create(CLOCK_MONOTONIC, 0);
     if (d->event_fd < 0) {
         fprintf(stderr, "timerfd_create error: %s\n", strerror(errno));
@@ -168,7 +122,10 @@ static int at_deadline_wait(struct at_deadline *d, bool *timed_out) {
     }
 }
 
-static void at_deadline_destroy(struct at_deadline *d) { close(d->event_fd); }
+static void at_deadline_destroy(struct at_deadline *d) {
+    if (d->event_fd >= 0)
+        close(d->event_fd);
+}
 #elif defined(AT_HAVE_KQUEUE)
 static int at_deadline_init(struct at_deadline *d, int fd, int ms) {
     d->fd = fd;
@@ -182,7 +139,7 @@ static int at_deadline_init(struct at_deadline *d, int fd, int ms) {
     struct kevent changes[2];
     EV_SET(&changes[0], fd, EVFILT_READ, EV_ADD, 0, 0, NULL);
     EV_SET(&changes[1], (uintptr_t)d, EVFILT_TIMER, EV_ADD | EV_ONESHOT, 0, ms, NULL);
-    if (kevent(d->event_fd, changes, 2, NULL, 0, NULL) < 0) {
+    if (kevent(d->event_fd, changes, ms < 0 ? 1 : 2, NULL, 0, NULL) < 0) {
         fprintf(stderr, "kevent register error: %s\n", strerror(errno));
         close(d->event_fd);
         return -1;
@@ -225,18 +182,22 @@ static int at_deadline_init(struct at_deadline *d, int fd, int ms) {
 
 static int at_deadline_wait(struct at_deadline *d, bool *timed_out) {
     while (1) {
-        const int elapsed = at_elapsed_ms(&d->start);
-        if (elapsed >= d->ms) {
-            *timed_out = true;
-            return 0;
+        int timeout = -1;
+        if (d->ms >= 0) {
+            const int elapsed = at_elapsed_ms(&d->start);
+            if (elapsed >= d->ms) {
+                *timed_out = true;
+                return 0;
+            }
+            const int remain = d->ms - elapsed;
+            timeout = remain > AT_POLL_SLICE_MS ? AT_POLL_SLICE_MS : remain;
         }
 
         struct pollfd pfd;
         pfd.fd = d->fd;
         pfd.events = POLLIN;
 
-        const int remain = d->ms - elapsed;
-        const int rv = poll(&pfd, 1, remain > AT_POLL_SLICE_MS ? AT_POLL_SLICE_MS : remain);
+        const int rv = poll(&pfd, 1, timeout);
         if (rv < 0) {
             fprintf(stderr, "poll error: %s\n", strerror(errno));
             return -1;
@@ -298,10 +259,6 @@ end:
         found_response_data = NULL;
     }
     return result;
-}
-
-int at_expect(struct at_userdata *userdata, char **response, const char *expected) {
-    return at_expect_with_deadline(userdata, response, expected, AT_DEFAULT_DEADLINE_MS);
 }
 
 int at_device_open(struct at_userdata *userdata, const char *device_name) {

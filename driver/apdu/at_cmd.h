@@ -9,7 +9,10 @@
 
 #define AT_MAX_LOGICAL_CHANNELS 20
 
-#define AT_DEFAULT_DEADLINE_MS 10000
+/*
+ * Pass as `deadline_ms` to wait for the response without a time limit.
+ */
+#define AT_DEADLINE_INFINITE (-1)
 #define AT_RECOVERY_DEADLINE_MS 30000
 #define AT_CGLA_DEADLINE_MS 240000
 #define AT_PROBE_DEADLINE_MS 3000
@@ -51,8 +54,28 @@ int enumerate_serial_device(cJSON *device);
 
 int at_write_command(struct at_userdata *userdata, const char *command);
 
+/*
+ * Extracts the next complete line from `buf` into `line` and strips the trailing CR.
+ * Returns 0 on success, -1 if no complete line is buffered yet.
+ */
+int at_pop_line(char *buf, size_t *buf_len, char *line, size_t line_size);
+
+/*
+ * Applies AT response bookkeeping (OK/ERROR detection, `expected` prefix capture)
+ * to an already-extracted `line`.
+ * Returns 0 once `result` is final, -1 if more lines are needed.
+ */
+int at_match_line(const char *line, const char *expected, char **found_response_data, int *result);
+
+/*
+ * Reads response lines until OK or ERROR, failing if `deadline_ms` passes first.
+ * `deadline_ms` may be AT_DEADLINE_INFINITE.
+ */
 int at_expect_with_deadline(struct at_userdata *userdata, char **response, const char *expected, int deadline_ms);
 
+/*
+ * Same as at_expect_with_deadline() with AT_DEADLINE_INFINITE.
+ */
 int at_expect(struct at_userdata *userdata, char **response, const char *expected);
 
 int at_device_open(struct at_userdata *userdata, const char *device_name);
